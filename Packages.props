@@ -4,6 +4,9 @@
     <_AutoFixture>4.11.0</_AutoFixture>
     <_CluedIn>4.5.0-alpha.*</_CluedIn>
   </PropertyGroup>
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
   <ItemGroup>
     <!--
         Specified versions for dependencies in test projects
