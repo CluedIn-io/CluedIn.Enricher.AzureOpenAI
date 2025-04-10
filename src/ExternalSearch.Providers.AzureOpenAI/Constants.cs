@@ -61,30 +61,11 @@ public static class Constants
     {
         new()
         {
-            DisplayName = "Base Url",
+            DisplayName = "AI Deployment Name",
             Type = "input",
             IsRequired = true,
-            Name = KeyName.BaseUrl,
-            Help = "The Azure OpenAI base url.",
-        },
-        new()
-        {
-            DisplayName = "API Key",
-            Type = "password",
-            IsRequired = true,
-            Name = KeyName.ApiToken,
-            Help = "The key to authenticate access to the Azure OpenAI API.",
-            // TODO Reapply validation in 4.5.0 onwards
-            //ValidationRules =
-            //    [new() { { "regex", "\\s" }, { "message", "Spaces are not allowed" } }]
-        },
-        new()
-        {
-            DisplayName = "AI Model/Deployment Name",
-            Type = "input",
-            IsRequired = true,
-            Name = KeyName.AiModel,
-            Help = "The Azure OpenAI Model/Deployment Name.",
+            Name = KeyName.AiDeployment,
+            Help = "The Azure OpenAI Deployment Name.",
         },
         new()
         {
@@ -92,8 +73,7 @@ public static class Constants
             Type = "entityTypeSelector",
             IsRequired = true,
             Name = KeyName.AcceptedEntityType,
-            Help =
-                "The entity type that defines the golden records you want to enrich (e.g., /Organization)."
+            Help = "The entity type that defines the golden records you want to enrich (e.g., /Organization)."
         },
         new()
         {
@@ -102,15 +82,7 @@ public static class Constants
             IsRequired = true,
             Name = KeyName.Prompt,
             Help = "The prompt that will be passed to Azure OpenAI to generate results.",
-        },
-        //new()
-        //{
-        //    DisplayName = "Response Vocabulary Key",
-        //    Type = "vocabularyKeySelector",
-        //    IsRequired = true,
-        //    Name = KeyName.ResponseVocabularyKey,
-        //    Help = "The vocabulary key that will be used to map the generated results.",
-        //}
+        }
     };
 
     public static AuthMethods AuthMethods { get; set; } = new()
@@ -124,11 +96,8 @@ public static class Constants
 
     public struct KeyName
     {
-        public const string ApiToken = "apiToken";
         public const string AcceptedEntityType = "acceptedEntityType";
-        public const string AiModel = "aiModel";
-        public const string BaseUrl = "baseUrl";
+        public const string AiDeployment = "aiDeploymentName";
         public const string Prompt = "prompt";
-        //public const string ResponseVocabularyKey = "responseVocabularyKey";
     }
 }
