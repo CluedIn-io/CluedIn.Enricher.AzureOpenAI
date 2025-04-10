@@ -47,15 +47,13 @@ public static class Constants
 
     public static readonly Guid ProviderId = Guid.Parse("051e638f-747d-450c-9f4d-cf4a6deb0388");
 
-    //TODO Update About Description
     public static string About { get; set; } =
-        "Azure OpenAI";
+        "The Azure OpenAI enricher allows you to enrich golden records by sending prompts to Azure OpenAI.";
 
     public static string Icon { get; set; } = "Resources.logo.svg";
 
-    //TODO Update Domain url
     public static string Domain { get; set; } =
-        "";
+        "N/A";
 
     public static IEnumerable<Control> Properties { get; set; } = new List<Control>
     {
@@ -78,7 +76,7 @@ public static class Constants
         new()
         {
             DisplayName = "Prompt",
-            Type = "input",
+            Type = "multiline",
             IsRequired = true,
             Name = KeyName.Prompt,
             Help = "The instruction sent to Azure OpenAI for generating results. It requires at least one input (e.g., {Vocabulary:XXXX.YYYY}) and one output (e.g., {output:Vocabulary:PPPP.QQQQ}).",

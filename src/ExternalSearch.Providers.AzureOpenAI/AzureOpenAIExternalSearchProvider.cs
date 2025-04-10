@@ -106,7 +106,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
         using (context.Log.BeginScope("{0} {1}: query {2}, request {3}, result {4}", GetType().Name, "BuildClues", query, request, result))
         {
-            var deploymentName = query.QueryParameters["deploymentName"].Single();
+            //var deploymentName = query.QueryParameters["deploymentName"].Single();
 
             var resultItem = result.As<JObject>();
             var clue = new Clue(new EntityCode(request.EntityMetaData.EntityType, "AI", query.QueryKey.ToDeterministicGuid()), context.Organization);
@@ -114,7 +114,8 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
             // add request.EntityMetaData.OriginEntityCode to the codes so that this clue will merge
             clue.Data.EntityData.Codes.Add(request.EntityMetaData.OriginEntityCode);
 
-            clue.Data.EntityData.Authors.Add(deploymentName);
+            //Temporary commented, it causes the Created By in UI to be the author if there is no original author
+            //clue.Data.EntityData.Authors.Add(deploymentName); 
 
             PopulateMetadata(clue.Data.EntityData, resultItem, request);
 

@@ -28,9 +28,6 @@ public class AzureOpenAIOrganizationVocabulary : SimpleVocabulary
 
         AddGroup("Metadata", group =>
         {
-            Postcode = group.Add(new VocabularyKey("postcode"));
         });
     }
-
-    public VocabularyKey Postcode { get; protected set; }
 }
