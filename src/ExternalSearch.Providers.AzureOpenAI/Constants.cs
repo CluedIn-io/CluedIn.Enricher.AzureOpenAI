@@ -81,7 +81,7 @@ public static class Constants
             Type = "input",
             IsRequired = true,
             Name = KeyName.Prompt,
-            Help = "The prompt that will be passed to Azure OpenAI to generate results.",
+            Help = "The instruction sent to Azure OpenAI for generating results. It requires at least one input (e.g., {Vocabulary:XXXX.YYYY}) and one output (e.g., {output:Vocabulary:PPPP.QQQQ}).",
         }
     };
 
