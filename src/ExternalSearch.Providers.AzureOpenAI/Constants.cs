@@ -47,44 +47,23 @@ public static class Constants
 
     public static readonly Guid ProviderId = Guid.Parse("051e638f-747d-450c-9f4d-cf4a6deb0388");
 
-    //TODO Update About Description
     public static string About { get; set; } =
-        "Azure OpenAI";
+        "The Azure OpenAI enricher allows you to enrich golden records by sending prompts to Azure OpenAI.";
 
     public static string Icon { get; set; } = "Resources.logo.svg";
 
-    //TODO Update Domain url
     public static string Domain { get; set; } =
-        "";
+        "N/A";
 
     public static IEnumerable<Control> Properties { get; set; } = new List<Control>
     {
         new()
         {
-            DisplayName = "Base Url",
+            DisplayName = "AI Deployment Name",
             Type = "input",
             IsRequired = true,
-            Name = KeyName.BaseUrl,
-            Help = "The Azure OpenAI base url.",
-        },
-        new()
-        {
-            DisplayName = "API Key",
-            Type = "password",
-            IsRequired = true,
-            Name = KeyName.ApiToken,
-            Help = "The key to authenticate access to the Azure OpenAI API.",
-            // TODO Reapply validation in 4.5.0 onwards
-            //ValidationRules =
-            //    [new() { { "regex", "\\s" }, { "message", "Spaces are not allowed" } }]
-        },
-        new()
-        {
-            DisplayName = "AI Model/Deployment Name",
-            Type = "input",
-            IsRequired = true,
-            Name = KeyName.AiModel,
-            Help = "The Azure OpenAI Model/Deployment Name.",
+            Name = KeyName.AiDeployment,
+            Help = "The Azure OpenAI Deployment Name.",
         },
         new()
         {
@@ -92,25 +71,16 @@ public static class Constants
             Type = "entityTypeSelector",
             IsRequired = true,
             Name = KeyName.AcceptedEntityType,
-            Help =
-                "The entity type that defines the golden records you want to enrich (e.g., /Organization)."
+            Help = "The entity type that defines the golden records you want to enrich (e.g., /Organization)."
         },
         new()
         {
             DisplayName = "Prompt",
-            Type = "input",
+            Type = "multiline",
             IsRequired = true,
             Name = KeyName.Prompt,
-            Help = "The prompt that will be passed to Azure OpenAI to generate results.",
-        },
-        //new()
-        //{
-        //    DisplayName = "Response Vocabulary Key",
-        //    Type = "vocabularyKeySelector",
-        //    IsRequired = true,
-        //    Name = KeyName.ResponseVocabularyKey,
-        //    Help = "The vocabulary key that will be used to map the generated results.",
-        //}
+            Help = "The instruction sent to Azure OpenAI for generating results. It requires at least one input (e.g., {Vocabulary:XXXX.YYYY}) and one output (e.g., {output:Vocabulary:PPPP.QQQQ}).",
+        }
     };
 
     public static AuthMethods AuthMethods { get; set; } = new()
@@ -124,11 +94,8 @@ public static class Constants
 
     public struct KeyName
     {
-        public const string ApiToken = "apiToken";
         public const string AcceptedEntityType = "acceptedEntityType";
-        public const string AiModel = "aiModel";
-        public const string BaseUrl = "baseUrl";
+        public const string AiDeployment = "aiDeploymentName";
         public const string Prompt = "prompt";
-        //public const string ResponseVocabularyKey = "responseVocabularyKey";
     }
 }
