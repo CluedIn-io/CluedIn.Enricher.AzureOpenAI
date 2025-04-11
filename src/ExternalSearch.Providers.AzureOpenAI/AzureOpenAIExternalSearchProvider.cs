@@ -109,7 +109,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
             //var deploymentName = query.QueryParameters["deploymentName"].Single();
 
             var resultItem = result.As<JObject>();
-            var clue = new Clue(new EntityCode(request.EntityMetaData.EntityType, "AI", query.QueryKey.ToDeterministicGuid()), context.Organization);
+            var clue = new Clue(new EntityCode(request.EntityMetaData.EntityType, "AI", $"{query.QueryKey}{request.EntityMetaData.OriginEntityCode}".ToDeterministicGuid()), context.Organization);
 
             // add request.EntityMetaData.OriginEntityCode to the codes so that this clue will merge
             clue.Data.EntityData.Codes.Add(request.EntityMetaData.OriginEntityCode);
