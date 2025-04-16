@@ -1,10 +1,9 @@
 ﻿using Newtonsoft.Json;
 
-namespace CluedIn.ExternalSearch.Providers.AzureOpenAI.Models
+namespace CluedIn.ExternalSearch.Providers.AzureOpenAI.Models;
+
+internal class OpenAiErrorResponse
 {
-    internal class OpenAiErrorResponse
-    {
-        [JsonProperty("error")]
-        public OpenAiErrorDetails? Error { get; set; }
-    }
+    [JsonProperty("error")]
+    public OpenAiErrorDetails? Error { get; set; }
 }

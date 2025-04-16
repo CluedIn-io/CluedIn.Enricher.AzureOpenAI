@@ -4,9 +4,7 @@ using System.Linq;
 using System.Net;
 using System.Text.RegularExpressions;
 using System.Threading;
-using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using RestSharp;
+using System.Web;
 using CluedIn.Core;
 using CluedIn.Core.Agent;
 using CluedIn.Core.Connectors;
@@ -18,12 +16,14 @@ using CluedIn.Core.Processing;
 using CluedIn.Core.Providers;
 using CluedIn.ExternalSearch.Provider;
 using CluedIn.ExternalSearch.Providers.AzureOpenAI.Models;
-using CluedIn.Rules.Tokens;
-using EntityType = CluedIn.Core.Data.EntityType;
-using System.Web;
 using CluedIn.ExternalSearch.Providers.AzureOpenAI.Models.Chat;
+using CluedIn.Rules.Tokens;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using RestSharp;
+using EntityType = CluedIn.Core.Data.EntityType;
 using ExecutionContext = CluedIn.Core.ExecutionContext;
 
 namespace CluedIn.ExternalSearch.Providers.AzureOpenAI;
@@ -34,12 +34,13 @@ namespace CluedIn.ExternalSearch.Providers.AzureOpenAI;
 public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IExtendedEnricherMetadata,
     IConfigurableExternalSearchProvider, IExternalSearchProviderWithVerifyConnection
 {
-    private readonly IMemoryCache _cache;
+    private const string OutputMatchesPattern = "{(output:[^}]+?)}";
     /**********************************************************************************************************
      * FIELDS
      **********************************************************************************************************/
 
     private static readonly EntityType[] _defaultAcceptedEntityTypes = [EntityType.Organization];
+    private readonly IMemoryCache _cache;
 
     /**********************************************************************************************************
      * CONSTRUCTORS
@@ -156,7 +157,6 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
             return metadata;
         }
-
     }
 
     public IPreviewImage GetPrimaryEntityPreviewImage(ExecutionContext context, IExternalSearchQueryResult result,
@@ -193,71 +193,6 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
     public IEnumerable<Control> Properties { get; } = Constants.Properties;
     public Guide Guide { get; } = Constants.Guide;
     public IntegrationType Type { get; } = Constants.IntegrationType;
-
-    private bool DeploymentSupportsCompletion(ExecutionContext executionContext, string deploymentName)
-    {
-        var baseUrl = executionContext.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "");
-
-        var deploymentSupportsCompletionCacheKey = $"{nameof(DeploymentSupportsCompletion)}_{executionContext.Organization.Id}_{baseUrl}_{deploymentName}";
-        if (_cache.TryGetValue(deploymentSupportsCompletionCacheKey, out var cached) && cached != null)
-        {
-            return (bool)cached;
-        }
-
-        lock (this)
-        {
-            if (_cache.TryGetValue(deploymentSupportsCompletionCacheKey, out cached) && cached != null)
-            {
-                return (bool)cached;
-            }
-
-            var supportsCompletion = true;
-
-            var apiKey = executionContext.Organization.Settings.GetValue("OpenAiApiKey", "OpenAiApiKey", "");
-
-            baseUrl = baseUrl.TrimEnd('/');
-
-            var client = new RestClient(baseUrl);
-            var request =
-                new RestRequest(
-                    $"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/completions?api-version=2022-12-01",
-                    Method.POST);
-            request.AddHeader("api-key", apiKey);
-            request.AddParameter("application/json",
-                JsonConvert.SerializeObject(new OpenAiCompletionRequest
-                {
-                    Prompt = "Hello",
-                    BestOf = 1,
-                    FrequencyPenalty = 0,
-                    MaxTokens = 2000,
-                    PresencePenalty = 0,
-                    Stop = null,
-                    Temperature = 0,
-                    TopP = 0.5f
-                }), ParameterType.RequestBody);
-            var response = client.Execute<OpenAiResponse>(request);
-
-            if (response.StatusCode == HttpStatusCode.BadRequest &&
-                response.ContentType.Contains("json", StringComparison.OrdinalIgnoreCase))
-            {
-                var error = JsonConvert.DeserializeObject<OpenAiErrorResponse>(response.Content);
-
-                if (error?.Error?.Code == "OperationNotSupported")
-                {
-                    supportsCompletion = false;
-
-                    _cache.Set(deploymentSupportsCompletionCacheKey, supportsCompletion, DateTimeOffset.Now.AddMinutes(5));
-                }
-            }
-
-            if (response.IsSuccessful)
-            {
-                _cache.Set(deploymentSupportsCompletionCacheKey, supportsCompletion, DateTimeOffset.Now.AddMinutes(5));
-            }
-
-            return supportsCompletion;
-        }
-    }
 
 
     public ConnectionVerificationResult VerifyConnection(ExecutionContext context,
@@ -318,6 +253,71 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         }
     }
 
+    private bool DeploymentSupportsCompletion(ExecutionContext executionContext, string deploymentName)
+    {
+        var baseUrl = executionContext.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "");
+
+        var deploymentSupportsCompletionCacheKey = $"{nameof(DeploymentSupportsCompletion)}_{executionContext.Organization.Id}_{baseUrl}_{deploymentName}";
+        if (_cache.TryGetValue(deploymentSupportsCompletionCacheKey, out var cached) && cached != null)
+        {
+            return (bool)cached;
+        }
+
+        lock (this)
+        {
+            if (_cache.TryGetValue(deploymentSupportsCompletionCacheKey, out cached) && cached != null)
+            {
+                return (bool)cached;
+            }
+
+            var supportsCompletion = true;
+
+            var apiKey = executionContext.Organization.Settings.GetValue("OpenAiApiKey", "OpenAiApiKey", "");
+
+            baseUrl = baseUrl.TrimEnd('/');
+
+            var client = new RestClient(baseUrl);
+            var request =
+                new RestRequest(
+                    $"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/completions?api-version=2022-12-01",
+                    Method.POST);
+            request.AddHeader("api-key", apiKey);
+            request.AddParameter("application/json",
+                JsonConvert.SerializeObject(new OpenAiCompletionRequest
+                {
+                    Prompt = "Hello",
+                    BestOf = 1,
+                    FrequencyPenalty = 0,
+                    MaxTokens = 2000,
+                    PresencePenalty = 0,
+                    Stop = null,
+                    Temperature = 0,
+                    TopP = 0.5f,
+                }), ParameterType.RequestBody);
+            var response = client.Execute<OpenAiResponse>(request);
+
+            if (response.StatusCode == HttpStatusCode.BadRequest &&
+                response.ContentType.Contains("json", StringComparison.OrdinalIgnoreCase))
+            {
+                var error = JsonConvert.DeserializeObject<OpenAiErrorResponse>(response.Content);
+
+                if (error?.Error?.Code == "OperationNotSupported")
+                {
+                    supportsCompletion = false;
+
+                    _cache.Set(deploymentSupportsCompletionCacheKey, supportsCompletion, DateTimeOffset.Now.AddMinutes(5));
+                }
+            }
+
+            if (response.IsSuccessful)
+            {
+                _cache.Set(deploymentSupportsCompletionCacheKey, supportsCompletion, DateTimeOffset.Now.AddMinutes(5));
+            }
+
+            return supportsCompletion;
+        }
+    }
+
     private IEnumerable<EntityType> Accepts(IDictionary<string, object> config)
     {
         return Accepts(new AzureOpenAIExternalSearchJobData(config));
@@ -375,16 +375,16 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
             var outputMatches = Regex.Matches(prompt, OutputMatchesPattern).OfType<Match>();
 
             prompt += $$"""
-                       
-                       Response in JSON using the following template
-                       ###
-                       {
-                           {{string.Join("\n    ", outputMatches.Select(m => $"""
-                                                                              "{m.Groups[1].Value}": ""
-                                                                              """).Distinct())}}
-                       }
-                       ###
-                       """;
+
+                        Response in JSON using the following template
+                        ###
+                        {
+                            {{string.Join("\n    ", outputMatches.Select(m => $"""
+                                                                               "{m.Groups[1].Value}": ""
+                                                                               """).Distinct())}}
+                        }
+                        ###
+                        """;
 
             var queryDict = new Dictionary<string, string>
             {
@@ -397,8 +397,6 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
             context.Log.LogTrace("Finished building queries for '{Name}'", request.EntityMetaData.Name);
         }
     }
-
-    private const string OutputMatchesPattern = "{(output:[^}]+?)}";
 
     private IEnumerable<IExternalSearchQueryResult> InternalExecuteSearch(ExecutionContext context, IExternalSearchQuery query, AzureOpenAIExternalSearchJobData jobData)
     {
@@ -421,9 +419,9 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
             var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName);
 
-            var response = deploymentSupportsCompletion ?
-                QueryInternalUsingCompletionApi(context, deploymentName, prompt) :
-                QueryInternalUsingChatApi(context, deploymentName, prompt);
+            var response = deploymentSupportsCompletion
+                ? QueryInternalUsingCompletionApi(context, deploymentName, prompt)
+                : QueryInternalUsingChatApi(context, deploymentName, prompt);
 
             JObject jsonResponse;
 
@@ -433,11 +431,12 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
             }
             catch
             {
-                prompt += "\n\nImportant: A prior attempt to answer this question resulted in malformed JSON. Please retry and verify that the output adheres strictly to the specified JSON format. The response must consist solely of valid JSON, as it will be programmatically processed.";
+                prompt +=
+                    "\n\nImportant: A prior attempt to answer this question resulted in malformed JSON. Please retry and verify that the output adheres strictly to the specified JSON format. The response must consist solely of valid JSON, as it will be programmatically processed.";
 
-                response = deploymentSupportsCompletion ?
-                    QueryInternalUsingCompletionApi(context, deploymentName, prompt) :
-                    QueryInternalUsingChatApi(context, deploymentName, prompt);
+                response = deploymentSupportsCompletion
+                    ? QueryInternalUsingCompletionApi(context, deploymentName, prompt)
+                    : QueryInternalUsingChatApi(context, deploymentName, prompt);
 
                 jsonResponse = JObject.Parse(response);
             }
@@ -465,7 +464,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
             PresencePenalty = 0,
             Stop = null,
             Temperature = 0,
-            TopP = 0.5f
+            TopP = 0.5f,
         }), ParameterType.RequestBody);
         var response = client.Execute<OpenAiResponse>(request);
 
@@ -512,7 +511,11 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         {
             Messages =
             [
-                new OpenAiChatMessage { Role = "user", Content = prompt }
+                new OpenAiChatMessage
+                {
+                    Role = "user",
+                    Content = prompt,
+                },
             ],
             Temperature = 0,
         }), ParameterType.RequestBody);

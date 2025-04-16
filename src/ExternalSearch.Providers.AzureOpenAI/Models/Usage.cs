@@ -1,16 +1,15 @@
 ﻿using Newtonsoft.Json;
 
-namespace CluedIn.ExternalSearch.Providers.AzureOpenAI.Models
+namespace CluedIn.ExternalSearch.Providers.AzureOpenAI.Models;
+
+internal class Usage
 {
-    internal class Usage
-    {
-        [JsonProperty("completion_tokens")]
-        public int CompletionTokens { get; set; }
+    [JsonProperty("completion_tokens")]
+    public int CompletionTokens { get; set; }
 
-        [JsonProperty("prompt_tokens")]
-        public int PromptTokens { get; set; }
+    [JsonProperty("prompt_tokens")]
+    public int PromptTokens { get; set; }
 
-        [JsonProperty("total_tokens")]
-        public int TotalTokens { get; set; }
-    }
+    [JsonProperty("total_tokens")]
+    public int TotalTokens { get; set; }
 }

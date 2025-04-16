@@ -71,7 +71,7 @@ public static class Constants
             Type = "entityTypeSelector",
             IsRequired = true,
             Name = KeyName.AcceptedEntityType,
-            Help = "The entity type that defines the golden records you want to enrich (e.g., /Organization)."
+            Help = "The entity type that defines the golden records you want to enrich (e.g., /Organization).",
         },
         new()
         {
@@ -80,12 +80,12 @@ public static class Constants
             IsRequired = true,
             Name = KeyName.Prompt,
             Help = "The instruction sent to Azure OpenAI for generating results. It requires at least one input (e.g., {Vocabulary:XXXX.YYYY}) and one output (e.g., {output:Vocabulary:PPPP.QQQQ}).",
-        }
+        },
     };
 
     public static AuthMethods AuthMethods { get; set; } = new()
     {
-        Token = new List<Control>().Concat(Properties)
+        Token = new List<Control>().Concat(Properties),
     };
 
     public static Guide Guide { get; set; } = new() { Instructions = Instruction };
