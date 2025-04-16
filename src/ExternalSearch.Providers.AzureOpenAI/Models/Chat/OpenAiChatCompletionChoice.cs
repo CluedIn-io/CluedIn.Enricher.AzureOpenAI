@@ -1,10 +1,9 @@
 ﻿using Newtonsoft.Json;
 
-namespace CluedIn.ExternalSearch.Providers.AzureOpenAI.Models.Chat
+namespace CluedIn.ExternalSearch.Providers.AzureOpenAI.Models.Chat;
+
+internal class OpenAiChatCompletionChoice
 {
-    internal class OpenAiChatCompletionChoice
-    {
-        [JsonProperty("message")]
-        public OpenAiChatMessage? Message { get; set; }
-    }
+    [JsonProperty("message")]
+    public OpenAiChatMessage? Message { get; set; }
 }
