@@ -578,9 +578,10 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
     private void PopulateMetadata(IEntityMetadata metadata, IExternalSearchQueryResult<JObject> resultItem,
         IExternalSearchRequest request)
     {
+        var code = new EntityCode(request.EntityMetaData.EntityType, "AI", $"{request.Queries.FirstOrDefault()?.QueryKey}{request.EntityMetaData.OriginEntityCode}".ToDeterministicGuid());
         metadata.EntityType = request.EntityMetaData.EntityType;
         metadata.Name = request.EntityMetaData.Name;
-        metadata.OriginEntityCode = request.EntityMetaData.OriginEntityCode;
+        metadata.OriginEntityCode = code;
 
         using var en = resultItem.Data.GetEnumerator();
         while (en.MoveNext())
