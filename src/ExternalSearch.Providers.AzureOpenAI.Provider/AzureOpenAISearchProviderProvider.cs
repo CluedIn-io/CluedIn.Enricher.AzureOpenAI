@@ -46,7 +46,7 @@ public class AzureOpenAISearchProviderProvider : ProviderBase, IExtendedProvider
             SupportsConfiguration = true,
             SupportsAutomaticWebhookCreation = false,
             SupportsWebHooks = false,
-            Type = "Enricher"
+            Type = "Enricher",
         };
     }
 

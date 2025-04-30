@@ -3,22 +3,28 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Text.RegularExpressions;
-using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using RestSharp;
+using System.Threading;
+using System.Web;
 using CluedIn.Core;
+using CluedIn.Core.Agent;
 using CluedIn.Core.Connectors;
 using CluedIn.Core.Data;
 using CluedIn.Core.Data.Parts;
 using CluedIn.Core.Data.Relational;
-using CluedIn.Core.Data.Vocabularies;
 using CluedIn.Core.ExternalSearch;
+using CluedIn.Core.Processing;
 using CluedIn.Core.Providers;
-using CluedIn.Crawling.Helpers;
 using CluedIn.ExternalSearch.Provider;
 using CluedIn.ExternalSearch.Providers.AzureOpenAI.Models;
-using CluedIn.ExternalSearch.Providers.AzureOpenAI.Vocabularies;
+using CluedIn.ExternalSearch.Providers.AzureOpenAI.Models.Chat;
+using CluedIn.Rules.Tokens;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using RestSharp;
 using EntityType = CluedIn.Core.Data.EntityType;
+using ExecutionContext = CluedIn.Core.ExecutionContext;
 
 namespace CluedIn.ExternalSearch.Providers.AzureOpenAI;
 
@@ -28,19 +34,22 @@ namespace CluedIn.ExternalSearch.Providers.AzureOpenAI;
 public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IExtendedEnricherMetadata,
     IConfigurableExternalSearchProvider, IExternalSearchProviderWithVerifyConnection
 {
+    private const string OutputMatchesPattern = "{(output:[^}]+?)}";
     /**********************************************************************************************************
      * FIELDS
      **********************************************************************************************************/
 
     private static readonly EntityType[] _defaultAcceptedEntityTypes = [EntityType.Organization];
+    private readonly IMemoryCache _cache;
 
     /**********************************************************************************************************
      * CONSTRUCTORS
      **********************************************************************************************************/
 
-    public AzureOpenAIExternalSearchProvider()
+    public AzureOpenAIExternalSearchProvider(IMemoryCache cache)
         : base(Constants.ProviderId, _defaultAcceptedEntityTypes)
     {
+        _cache = cache;
         var nameBasedTokenProvider = new NameBasedTokenProvider("AzureOpenAI");
 
         if (nameBasedTokenProvider.ApiToken != null)
@@ -76,7 +85,6 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         IExternalSearchQueryResult result, IExternalSearchRequest request, IDictionary<string, object> config,
         IProvider provider)
     {
-        //TODO Andrew map the results here to clue
         if (context == null)
         {
             throw new ArgumentNullException(nameof(context));
@@ -97,11 +105,18 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
             throw new ArgumentNullException(nameof(request));
         }
 
-        using (context.Log.BeginScope("{0} {1}: query {2}, request {3}, result {4}", GetType().Name, "BuildClues",
-                   query, request, result))
+        using (context.Log.BeginScope("{0} {1}: query {2}, request {3}, result {4}", GetType().Name, "BuildClues", query, request, result))
         {
-            var resultItem = result.As<AzureOpenAIResponse>();
-            var clue = new Clue(request.EntityMetaData.OriginEntityCode, context.Organization);
+            //var deploymentName = query.QueryParameters["deploymentName"].Single();
+
+            var resultItem = result.As<JObject>();
+            var clue = new Clue(new EntityCode(request.EntityMetaData.EntityType, "AI", $"{query.QueryKey}{request.EntityMetaData.OriginEntityCode}".ToDeterministicGuid()), context.Organization);
+
+            // add request.EntityMetaData.OriginEntityCode to the codes so that this clue will merge
+            clue.Data.EntityData.Codes.Add(request.EntityMetaData.OriginEntityCode);
+
+            //Temporary commented, it causes the Created By in UI to be the author if there is no original author
+            //clue.Data.EntityData.Authors.Add(deploymentName); 
 
             PopulateMetadata(clue.Data.EntityData, resultItem, request);
 
@@ -134,7 +149,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         using (context.Log.BeginScope("{0} {1}: request {2}, result {3}", GetType().Name, "GetPrimaryEntityMetadata",
                    request, result))
         {
-            var metadata = CreateMetadata(result.As<AzureOpenAIResponse>(), request);
+            var metadata = CreateMetadata(result.As<JObject>(), request);
 
             context.Log.LogInformation(
                 "Primary entity meta data created, Name: '{Name}' OriginEntityCode: '{OriginEntityCode}'",
@@ -142,7 +157,6 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
             return metadata;
         }
-
     }
 
     public IPreviewImage GetPrimaryEntityPreviewImage(ExecutionContext context, IExternalSearchQueryResult result,
@@ -184,21 +198,124 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
     public ConnectionVerificationResult VerifyConnection(ExecutionContext context,
         IReadOnlyDictionary<string, object> config)
     {
-        //TODO Update Test Connection
-        IDictionary<string, object> configDict = config.ToDictionary(entry => entry.Key, entry => entry.Value);
-        var jobData = new AzureOpenAIExternalSearchJobData(configDict);
-        var client = new RestClient("URL");
+        var baseUrl = context.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "");
+        var apiKey = context.Organization.Settings.GetValue("OpenAiApiKey", "OpenAiApiKey", "");
+        var deploymentName = config[Constants.KeyName.AiDeployment] as string;
+        var prompt = config[Constants.KeyName.Prompt] as string;
 
-        var azureOpenAiRequest = new AzureOpenAIRequest();
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return new ConnectionVerificationResult(false, "OpenAI Base Url must not be blank");
+        }
 
-        var request = new RestRequest("data", Method.POST);
-        request.AddHeader("Content-Type", "application/json");
-        //request.AddHeader("ApiToken", jobData.ApiToken);
-        request.AddJsonBody(azureOpenAiRequest);
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            return new ConnectionVerificationResult(false, "OpenAI API Key must not be blank");
+        }
 
-        var response = client.ExecuteAsync<AzureOpenAIResponse>(request).Result;
+        if (string.IsNullOrWhiteSpace(deploymentName))
+        {
+            return new ConnectionVerificationResult(false, "Deployment Name must not be blank");
+        }
 
-        return ConstructVerifyConnectionResponse(response);
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            return new ConnectionVerificationResult(false, "Prompt must not be blank");
+        }
+
+        if (Regex.Matches(prompt, OutputMatchesPattern).Count == 0)
+        {
+            return new ConnectionVerificationResult(false, "Prompt must contain at least one output. eg, {output:vocabulary:product.description}");
+        }
+
+        var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName);
+
+        prompt = "Hello";
+
+        try
+        {
+            var response = deploymentSupportsCompletion
+                ? QueryInternalUsingCompletionApi(context, deploymentName, prompt)
+                : QueryInternalUsingChatApi(context, deploymentName, prompt);
+
+            return new ConnectionVerificationResult(!string.IsNullOrWhiteSpace(response), "Empty response receive from AI");
+        }
+        catch (Exception ex)
+        {
+            var message = ex.Message;
+
+            if (message.Contains("NotFound"))
+            {
+                message += $". Please verify that the deployment '{deploymentName}' exists";
+            }
+
+            return new ConnectionVerificationResult(false, message);
+        }
+    }
+
+    private bool DeploymentSupportsCompletion(ExecutionContext executionContext, string deploymentName)
+    {
+        var baseUrl = executionContext.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "");
+
+        var deploymentSupportsCompletionCacheKey = $"{nameof(DeploymentSupportsCompletion)}_{executionContext.Organization.Id}_{baseUrl}_{deploymentName}";
+        if (_cache.TryGetValue(deploymentSupportsCompletionCacheKey, out var cached) && cached != null)
+        {
+            return (bool)cached;
+        }
+
+        lock (this)
+        {
+            if (_cache.TryGetValue(deploymentSupportsCompletionCacheKey, out cached) && cached != null)
+            {
+                return (bool)cached;
+            }
+
+            var supportsCompletion = true;
+
+            var apiKey = executionContext.Organization.Settings.GetValue("OpenAiApiKey", "OpenAiApiKey", "");
+
+            baseUrl = baseUrl.TrimEnd('/');
+
+            var client = new RestClient(baseUrl);
+            var request =
+                new RestRequest(
+                    $"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/completions?api-version=2022-12-01",
+                    Method.POST);
+            request.AddHeader("api-key", apiKey);
+            request.AddParameter("application/json",
+                JsonConvert.SerializeObject(new OpenAiCompletionRequest
+                {
+                    Prompt = "Hello",
+                    BestOf = 1,
+                    FrequencyPenalty = 0,
+                    MaxTokens = 2000,
+                    PresencePenalty = 0,
+                    Stop = null,
+                    Temperature = 0,
+                    TopP = 0.5f,
+                }), ParameterType.RequestBody);
+            var response = client.Execute<OpenAiResponse>(request);
+
+            if (response.StatusCode == HttpStatusCode.BadRequest &&
+                response.ContentType.Contains("json", StringComparison.OrdinalIgnoreCase))
+            {
+                var error = JsonConvert.DeserializeObject<OpenAiErrorResponse>(response.Content);
+
+                if (error?.Error?.Code == "OperationNotSupported")
+                {
+                    supportsCompletion = false;
+
+                    _cache.Set(deploymentSupportsCompletionCacheKey, supportsCompletion, DateTimeOffset.Now.AddMinutes(5));
+                }
+            }
+
+            if (response.IsSuccessful)
+            {
+                _cache.Set(deploymentSupportsCompletionCacheKey, supportsCompletion, DateTimeOffset.Now.AddMinutes(5));
+            }
+
+            return supportsCompletion;
+        }
     }
 
     private IEnumerable<EntityType> Accepts(IDictionary<string, object> config)
@@ -240,12 +357,6 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
         using (context.Log.BeginScope($"{GetType().Name} BuildQueries: request {request}"))
         {
-            if (string.IsNullOrEmpty(config.ApiToken))
-            {
-                context.Log.LogError("ApiToken for Azure OpenAI must be provided.");
-                yield break;
-            }
-
             if (!Accepts(config, request.EntityMetaData.EntityType))
             {
                 context.Log.LogTrace("Unacceptable entity type from '{EntityName}', entity code '{EntityCode}'",
@@ -257,17 +368,29 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
             var entityType = request.EntityMetaData.EntityType;
 
-            var configMap = config.ToDictionary();
+            var ruleTokenParser = context.ApplicationContext.Container.Resolve<IRuleTokenParser<IRuleActionToken>>();
+            using var processingContext = context.ApplicationContext.CreateProcessingContext(context.Organization, JobRunId.Empty);
+            var prompt = ruleTokenParser.Parse(processingContext, (IEntityMetadataPart)request.EntityMetaData, config.Prompt);
 
-            //TODO Andrew Build the queries here
-            //var responseVocabularyKey = GetValue(request, configMap, Constants.KeyName.ResponseVocabularyKey);
+            var outputMatches = Regex.Matches(prompt, OutputMatchesPattern).OfType<Match>();
 
-            //context.Log.LogInformation(
-            //    "External search query produced, ExternalSearchQueryParameter: '{Identifier}' EntityType: '{EntityCode}' Value: '{SanitizedValue}'",
-            //    ExternalSearchQueryParameter.Identifier, entityType.Code, value);
+            prompt += $$"""
 
-            //var queryDict = new Dictionary<string, string> { { "responseVocabularyKey", responseVocabularyKey.FirstOrDefault() } };
-            var queryDict = new Dictionary<string, string>();
+                        Response in JSON using the following template
+                        ###
+                        {
+                            {{string.Join("\n    ", outputMatches.Select(m => $"""
+                                                                               "{m.Groups[1].Value}": ""
+                                                                               """).Distinct())}}
+                        }
+                        ###
+                        """;
+
+            var queryDict = new Dictionary<string, string>
+            {
+                { "prompt", prompt },
+                { "deploymentName", config.AiDeployment },
+            };
 
             yield return new ExternalSearchQuery(this, entityType, queryDict);
 
@@ -275,15 +398,8 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         }
     }
 
-    private IEnumerable<IExternalSearchQueryResult> InternalExecuteSearch(ExecutionContext context,
-        IExternalSearchQuery query, AzureOpenAIExternalSearchJobData jobData)
+    private IEnumerable<IExternalSearchQueryResult> InternalExecuteSearch(ExecutionContext context, IExternalSearchQuery query, AzureOpenAIExternalSearchJobData jobData)
     {
-        //TODO Andrew call OpenAI API here
-        if (string.IsNullOrEmpty(jobData.ApiToken))
-        {
-            throw new InvalidOperationException("ApiToken for AzureOpenAI must be provided.");
-        }
-
         if (context == null)
         {
             throw new ArgumentNullException(nameof(context));
@@ -296,15 +412,147 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
         using (context.Log.BeginScope("{0} {1}: query {2}", GetType().Name, "ExecuteSearch", query))
         {
-            context.Log.LogTrace("Starting external search for Id: '{Id}' QueryKey: '{QueryKey}'", query.Id,
-                query.QueryKey);
+            context.Log.LogTrace("Starting external search for Id: '{Id}' QueryKey: '{QueryKey}'", query.Id, query.QueryKey);
 
-            var client = new RestClient("URL");
+            var prompt = query.QueryParameters["prompt"].Single();
+            var deploymentName = query.QueryParameters["deploymentName"].Single();
 
-            var searchCompany = ExecuteRequest(context, query, client);
+            var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName);
 
-            yield return new ExternalSearchQueryResult<AzureOpenAIResponse>(query, searchCompany);
+            var response = deploymentSupportsCompletion
+                ? QueryInternalUsingCompletionApi(context, deploymentName, prompt)
+                : QueryInternalUsingChatApi(context, deploymentName, prompt);
+
+            JObject jsonResponse;
+
+            try
+            {
+                jsonResponse = JObject.Parse(response);
+            }
+            catch
+            {
+                prompt +=
+                    "\n\nImportant: A prior attempt to answer this question resulted in malformed JSON. Please retry and verify that the output adheres strictly to the specified JSON format. The response must consist solely of valid JSON, as it will be programmatically processed.";
+
+                response = deploymentSupportsCompletion
+                    ? QueryInternalUsingCompletionApi(context, deploymentName, prompt)
+                    : QueryInternalUsingChatApi(context, deploymentName, prompt);
+
+                jsonResponse = JObject.Parse(response);
+            }
+
+            yield return new ExternalSearchQueryResult<JObject>(query, jsonResponse);
         }
+    }
+
+    private string QueryInternalUsingCompletionApi(ExecutionContext executionContext, string deploymentName, string prompt, bool logError = true)
+    {
+        var baseUrl = executionContext.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "");
+        var apiKey = executionContext.Organization.Settings.GetValue("OpenAiApiKey", "OpenAiApiKey", "");
+
+        baseUrl = baseUrl.TrimEnd('/');
+
+        var client = new RestClient(baseUrl);
+        var request = new RestRequest($"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/completions?api-version=2022-12-01", Method.POST);
+        request.AddHeader("api-key", apiKey);
+        request.AddParameter("application/json", JsonConvert.SerializeObject(new OpenAiCompletionRequest
+        {
+            Prompt = prompt,
+            BestOf = 1,
+            FrequencyPenalty = 0,
+            MaxTokens = 2000,
+            PresencePenalty = 0,
+            Stop = null,
+            Temperature = 0,
+            TopP = 0.5f,
+        }), ParameterType.RequestBody);
+        var response = client.Execute<OpenAiResponse>(request);
+
+        if (response.StatusCode == HttpStatusCode.TooManyRequests)
+        {
+            Thread.Sleep(2000); // while developing we observed that the error message says to retry in 2s
+            throw new Exception($"Too many requests - Call to openai returned HTTP {response.StatusCode}"); // hack the message must start with 'Too many requests' for the core to retry
+        }
+
+        if (response.StatusCode != HttpStatusCode.OK)
+        {
+            executionContext.Log.LogError(response.Content);
+            throw new Exception($"Call to openai returned HTTP {response.StatusCode}");
+        }
+
+        if (response.Data == null)
+        {
+            throw new Exception(
+                $"openai returned HTTP {response.StatusCode} but {nameof(response)}.{nameof(response.Data)} was null");
+        }
+
+        var first = response.Data.Choices.SafeEnumerate().FirstOrDefault();
+
+        if (first?.Text == null)
+        {
+            throw new Exception("openai returned null");
+        }
+
+        return first.Text.TrimStart('\n');
+    }
+
+    private string QueryInternalUsingChatApi(ExecutionContext executionContext, string deploymentName, string prompt)
+    {
+        var baseUrl = executionContext.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "");
+        var apiKey = executionContext.Organization.Settings.GetValue("OpenAiApiKey", "OpenAiApiKey", "");
+
+        baseUrl = baseUrl.TrimEnd('/');
+
+        var client = new RestClient(baseUrl);
+
+        var request = new RestRequest($"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/chat/completions?api-version=2024-06-01", Method.POST);
+        request.AddHeader("api-key", apiKey);
+        request.AddParameter("application/json", JsonConvert.SerializeObject(new OpenAiChatCompletionRequest
+        {
+            Messages =
+            [
+                new OpenAiChatMessage
+                {
+                    Role = "user",
+                    Content = prompt,
+                },
+            ],
+            Temperature = 0,
+        }), ParameterType.RequestBody);
+        var response = client.Execute(request);
+
+        if (response.StatusCode == HttpStatusCode.TooManyRequests)
+        {
+            Thread.Sleep(2000); // while developing we observed that the error message says to retry in 2s
+            throw new Exception($"Too many requests - Call to openai returned HTTP {response.StatusCode}"); // hack the message must start with 'Too many requests' for the core to retry
+        }
+
+        if (response.StatusCode != HttpStatusCode.OK)
+        {
+            executionContext.Log.LogError(response.Content);
+            throw new Exception($"Call to openai returned HTTP {response.StatusCode}");
+        }
+
+        executionContext.Log.LogDebug($"Prompt\n{prompt}\n\nResponse\n{response.Content}");
+
+        var data = JsonConvert.DeserializeObject<OpenAiChatCompletionResponse>(response.Content);
+
+        if (data == null)
+        {
+            throw new Exception(
+                $"openai returned HTTP {response.StatusCode} but {nameof(data)} was null");
+        }
+
+        var first = data.Choices.SafeEnumerate().FirstOrDefault();
+
+        var content = first?.Message?.Content;
+
+        if (content == null)
+        {
+            throw new Exception("openai returned null");
+        }
+
+        return content.TrimEnd();
     }
 
     public override IPreviewImage GetPrimaryEntityPreviewImage(ExecutionContext context,
@@ -317,146 +565,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         return GetPrimaryEntityPreviewImage(context, result, request, dummyConfig, dummyProvider);
     }
 
-    private static AzureOpenAIResponse ExecuteRequest(ExecutionContext context, IExternalSearchQuery query, RestClient client)
-    {
-            var azureOpenAiRequest = new AzureOpenAIRequest();
-
-            var request = new RestRequest(Method.POST);
-            request.AddHeader("Content-Type", "application/json");
-            //request.AddHeader("ApiToken", apiToken);
-            request.AddJsonBody(azureOpenAiRequest);
-            var response = client.ExecuteAsync<AzureOpenAIResponse>(request).Result;
-
-        //    if (response.StatusCode == HttpStatusCode.OK)
-        //    {
-        //        if (response.Data != null && response.Data.SearchSummary.TotalRecordsFound > 0)
-        //        {
-        //            var data = response.Data?.Data?.FirstOrDefault();
-        //            var name = data?.TryGetValue("NAME", out var value) is true ? value?.ToString() : string.Empty;
-        //            var bvdNumber = data?.TryGetValue("BVD_ID_NUMBER", out var value1) is true ? value1?.ToString() : string.Empty;
-
-        //            var diagnostic =
-        //                $"External search for Id: '{query.Id}' QueryKey: '{query.QueryKey}' produced results, CompanyName: '{name}'  BvDNumber: '{bvdNumber}'";
-
-        //            context.Log.LogTrace(diagnostic);
-
-        //            return response.Data;
-        //        }
-        //        else
-        //        {
-        //            var diagnostic =
-        //                $"Failed external search for Id: '{query.Id}' QueryKey: '{query.QueryKey}' - StatusCode: '{response.StatusCode}' Content: '{response.Content}'";
-
-        //            context.Log.LogError(diagnostic);
-
-        //            var content = JsonConvert.DeserializeObject<dynamic>(response.Content);
-        //            if (content.error != null)
-        //            {
-        //                throw new InvalidOperationException(
-        //                    $"{content.error.info} - Type: {content.error.type} Code: {content.error.code}");
-        //            }
-
-        //            // TODO else do what with content ? ...
-        //        }
-        //    }
-        //    else if (response.StatusCode == HttpStatusCode.NoContent ||
-        //             response.StatusCode == HttpStatusCode.NotFound)
-        //    {
-        //        var diagnostic =
-        //            $"External search for Id: '{query.Id}' QueryKey: '{query.QueryKey}' produced no results - StatusCode: '{response.StatusCode}' Content: '{response.Content}'";
-
-        //        context.Log.LogWarning(diagnostic);
-
-        //        return null;
-        //    }
-        //    else if (response.ErrorException != null)
-        //    {
-        //        var diagnostic =
-        //            $"External search for Id: '{query.Id}' QueryKey: '{query.QueryKey}' produced no results - StatusCode: '{response.StatusCode}' Content: '{response.Content}'";
-
-        //        context.Log.LogError(diagnostic, response.ErrorException);
-
-        //        throw new AggregateException(response.ErrorException.Message, response.ErrorException);
-        //    }
-        //    else
-        //    {
-        //        var diagnostic =
-        //            $"Failed external search for Id: '{query.Id}' QueryKey: '{query.QueryKey}' - StatusCode: '{response.StatusCode}' Content: '{response.Content}'";
-
-        //        context.Log.LogError(diagnostic);
-
-        //        throw new ApplicationException(diagnostic);
-        //    }
-
-        //    context.Log.LogTrace("Finished external search for Id: '{Id}' QueryKey: '{QueryKey}'", query.Id,
-        //        query.QueryKey);
-        //}
-
-        return null;
-    }
-
-    private ConnectionVerificationResult ConstructVerifyConnectionResponse<T>(IRestResponse<T> response)
-    {
-        //TODO Update the test connection response
-        try
-        {
-            var errorMessageBase =
-                $"{Constants.ProviderName} returned \"{(int)response.StatusCode} {response.StatusDescription}\".";
-            if (response.ErrorException != null)
-            {
-                return new ConnectionVerificationResult(false,
-                    $"{errorMessageBase} {(!string.IsNullOrWhiteSpace(response.ErrorException.Message) ? response.ErrorException.Message : "This could be due to breaking changes in the external system")}.");
-            }
-
-            if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized)
-            {
-                return new ConnectionVerificationResult(false,
-                    $"{errorMessageBase} This could be due to invalid API key.");
-            }
-
-            var regex = new Regex(@"\<(html|head|body|div|span|img|p\>|a href)",
-                RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.IgnorePatternWhitespace);
-            var isHtml = regex.IsMatch(response.Content);
-
-            if (response.IsSuccessful)
-            {
-                return new ConnectionVerificationResult(response.IsSuccessful, string.Empty);
-            }
-
-            var azureOpenAiErrorResponse = JsonConvert.DeserializeObject<AzureOpenAIResponse>(response.Content);
-            //var formattedErrorMessage = string.Empty;
-
-            //if (azureOpenAiErrorResponse.At != null)
-            //{
-            //    formattedErrorMessage =
-            //        $"Error at: \"{azureOpenAiErrorResponse.At}\"";
-            //}
-
-            //if (azureOpenAiErrorResponse.Found is { Count: > 0 })
-            //{
-            //    formattedErrorMessage += $", Found: \"{azureOpenAiErrorResponse.Found.First().Value}\"";
-
-            //}
-
-            //if (azureOpenAiErrorResponse.Expect is { Count: > 0 })
-            //{
-            //    formattedErrorMessage += $", Expect: \"{azureOpenAiErrorResponse.Expect.First().Value}\"";
-            //}
-
-            //var errorMessage = azureOpenAiErrorResponse.At == null && azureOpenAiErrorResponse.Found == null && azureOpenAiErrorResponse.Expect == null || isHtml
-            //        ? $"{errorMessageBase} This could be due to breaking changes in the external system."
-            //        : $"{errorMessageBase} {formattedErrorMessage}.";
-
-            var errorMessage = string.Empty;
-            return new ConnectionVerificationResult(response.IsSuccessful, errorMessage);
-        }
-        catch (Exception ex)
-        {
-            return new ConnectionVerificationResult(false, ex.Message);
-        }
-    }
-
-    private IEntityMetadata CreateMetadata(IExternalSearchQueryResult<AzureOpenAIResponse> resultItem,
+    private IEntityMetadata CreateMetadata(IExternalSearchQueryResult<JObject> resultItem,
         IExternalSearchRequest request)
     {
         var metadata = new EntityMetadataPart();
@@ -466,34 +575,21 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         return metadata;
     }
 
-    private void PopulateMetadata(IEntityMetadata metadata, IExternalSearchQueryResult<AzureOpenAIResponse> resultItem,
+    private void PopulateMetadata(IEntityMetadata metadata, IExternalSearchQueryResult<JObject> resultItem,
         IExternalSearchRequest request)
     {
-        //TODO Andrew map the properties here
-        var data = resultItem.Data;
-
+        var code = new EntityCode(request.EntityMetaData.EntityType, "AI", $"{request.Queries.FirstOrDefault()?.QueryKey}{request.EntityMetaData.OriginEntityCode}".ToDeterministicGuid());
         metadata.EntityType = request.EntityMetaData.EntityType;
         metadata.Name = request.EntityMetaData.Name;
-        metadata.OriginEntityCode = request.EntityMetaData.OriginEntityCode;
+        metadata.OriginEntityCode = code;
 
-        //foreach (var kvp in data)
-        //{
-        //    var camelCaseKey = kvp.Key.Replace("_", " ").ToLowerInvariant().ToCamelCase();
-        //    metadata.Properties[AzureOpenAIVocabulary.Organization.KeyPrefix + AzureOpenAIVocabulary.Organization.KeySeparator + camelCaseKey] = kvp.Value.PrintIfAvailable();
-        //}
-
-        //metadata.Properties[AzureOpenAIVocabulary.Organization.Postcode] = data.PostCode;
-    }
-
-    private static HashSet<string> GetValue(IExternalSearchRequest request, IDictionary<string, object> config, string keyName)
-    {
-        HashSet<string> value = [];
-        if (config.TryGetValue(keyName, out var customVocabKey) && !string.IsNullOrWhiteSpace(customVocabKey?.ToString()))
+        using var en = resultItem.Data.GetEnumerator();
+        while (en.MoveNext())
         {
-            value = request.QueryParameters.GetValue(customVocabKey.ToString(), []);
+            var key = en.Current.Key;
+            key = Regex.Replace(key, "^output:vocabulary:", "", RegexOptions.IgnoreCase);
+            metadata.Properties[key] = en.Current.Value.ToString();
         }
-
-        return value;
     }
 
     // Since this is a configurable external search provider, these methods should never be called

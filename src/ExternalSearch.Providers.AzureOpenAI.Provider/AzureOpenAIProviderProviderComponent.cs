@@ -4,6 +4,7 @@ using CluedIn.Core;
 using CluedIn.Core.Providers;
 using CluedIn.Core.Server;
 using ComponentHost;
+using Microsoft.Extensions.Caching.Memory;
 using Constants = CluedIn.ExternalSearch.Providers.AzureOpenAI.Constants;
 
 namespace CluedIn.Provider.ExternalSearch.Providers.AzureOpenAI;
@@ -26,6 +27,8 @@ public sealed class AzureOpenAIProviderProviderComponent : ServiceApplicationCom
         // Dev. Note: Potential for compiler warning here ... CA2214: Do not call overridable methods in constructors
         //   this class has been sealed to prevent the CA2214 waring being raised by the compiler
         Container.Register(Component.For<AzureOpenAIProviderProviderComponent>().Instance(this));
+
+        Container.Register(Component.For<IMemoryCache>().UsingFactoryMethod(x => new MemoryCache(new MemoryCacheOptions())));
     }
 
     /**********************************************************************************************************

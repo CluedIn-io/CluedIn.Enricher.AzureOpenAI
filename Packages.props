@@ -4,6 +4,9 @@
     <_AutoFixture>4.11.0</_AutoFixture>
     <_CluedIn>4.4.0</_CluedIn>
   </PropertyGroup>
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
   <ItemGroup>
     <!--
         Specified versions for dependencies in test projects
@@ -34,5 +37,6 @@
     <PackageReference Update="CluedIn.Core" Version="$(_CluedIn)" />
     <!--    <PackageReference Update="CluedIn.Core.Agent" Version="$(_CluedIn)" />-->
     <PackageReference Update="CluedIn.ExternalSearch" Version="$(_CluedIn)" />
+    <PackageReference Update="CluedIn.Rules" Version="$(_CluedIn)" />
   </ItemGroup>
 </Project>
