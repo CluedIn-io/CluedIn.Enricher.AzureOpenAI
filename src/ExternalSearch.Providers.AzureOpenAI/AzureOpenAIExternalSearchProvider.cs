@@ -470,7 +470,19 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
         if (response.StatusCode == HttpStatusCode.TooManyRequests)
         {
-            Thread.Sleep(2000); // while developing we observed that the error message says to retry in 2s
+            // Try to get Retry-After from headers (Different model is having different request per minute)
+            var retryAfterHeader = response.Headers
+                .FirstOrDefault(h => h.Name.Equals("Retry-After", StringComparison.OrdinalIgnoreCase));
+
+            if (retryAfterHeader != null && int.TryParse(retryAfterHeader.Value?.ToString(), out var waitSeconds))
+            {
+                Thread.Sleep(waitSeconds * 1000);
+            }
+            else
+            {
+                Thread.Sleep(2000); // Set a default sleep time
+            }
+
             throw new Exception($"Too many requests - Call to openai returned HTTP {response.StatusCode}"); // hack the message must start with 'Too many requests' for the core to retry
         }
 
@@ -523,7 +535,18 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
         if (response.StatusCode == HttpStatusCode.TooManyRequests)
         {
-            Thread.Sleep(2000); // while developing we observed that the error message says to retry in 2s
+            // Try to get Retry-After from headers (Different model is having different request per minute)
+            var retryAfterHeader = response.Headers
+                .FirstOrDefault(h => h.Name.Equals("Retry-After", StringComparison.OrdinalIgnoreCase));
+            if (retryAfterHeader != null && int.TryParse(retryAfterHeader.Value?.ToString(), out var waitSeconds))
+            {
+                Thread.Sleep(waitSeconds * 1000);
+            }
+            else
+            {
+                Thread.Sleep(2000); // Set a default sleep time
+            }
+
             throw new Exception($"Too many requests - Call to openai returned HTTP {response.StatusCode}"); // hack the message must start with 'Too many requests' for the core to retry
         }
 
