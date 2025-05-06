@@ -577,7 +577,10 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
             var timeAlreadyWaited = (int)DateTime.Now.Subtract(responseAt).TotalMilliseconds;
             var waitTime = waitSeconds * 1000 - timeAlreadyWaited;
 
-            Thread.Sleep(waitTime);
+            if (waitTime > 0)
+            {
+                Thread.Sleep(waitTime);
+            }
         }
     }
 
