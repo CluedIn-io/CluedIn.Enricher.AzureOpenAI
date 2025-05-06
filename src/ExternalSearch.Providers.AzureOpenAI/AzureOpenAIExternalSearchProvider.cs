@@ -228,7 +228,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
             return new ConnectionVerificationResult(false, "Prompt must contain at least one output. eg, {output:vocabulary:product.description}");
         }
 
-        var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName);
+        var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName, baseUrl);
 
         prompt = "Hello";
 
@@ -253,10 +253,8 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         }
     }
 
-    private bool DeploymentSupportsCompletion(ExecutionContext executionContext, string deploymentName)
+    private bool DeploymentSupportsCompletion(ExecutionContext executionContext, string deploymentName, string baseUrl)
     {
-        var baseUrl = executionContext.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "");
-
         var deploymentSupportsCompletionCacheKey = $"{nameof(DeploymentSupportsCompletion)}_{executionContext.Organization.Id}_{baseUrl}_{deploymentName}";
         if (_cache.TryGetValue(deploymentSupportsCompletionCacheKey, out var cached) && cached != null)
         {
@@ -412,36 +410,40 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
         using (context.Log.BeginScope("{0} {1}: query {2}", GetType().Name, "ExecuteSearch", query))
         {
-            context.Log.LogTrace("Starting external search for Id: '{Id}' QueryKey: '{QueryKey}'", query.Id, query.QueryKey);
-
             var prompt = query.QueryParameters["prompt"].Single();
             var deploymentName = query.QueryParameters["deploymentName"].Single();
+            var baseUrl = context.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "");
 
-            var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName);
-
-            var response = deploymentSupportsCompletion
-                ? QueryInternalUsingCompletionApi(context, deploymentName, prompt)
-                : QueryInternalUsingChatApi(context, deploymentName, prompt);
-
-            JObject jsonResponse;
-
-            try
+            using (new DistributedLock(context, $"{nameof(AzureOpenAIExternalSearchProvider)}_{baseUrl}_{deploymentName}", exclusive: false))
             {
-                jsonResponse = JObject.Parse(response);
-            }
-            catch
-            {
-                prompt +=
-                    "\n\nImportant: A prior attempt to answer this question resulted in malformed JSON. Please retry and verify that the output adheres strictly to the specified JSON format. The response must consist solely of valid JSON, as it will be programmatically processed.";
+                context.Log.LogTrace("Starting external search for Id: '{Id}' QueryKey: '{QueryKey}'", query.Id, query.QueryKey);
 
-                response = deploymentSupportsCompletion
+                var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName, baseUrl);
+
+                var response = deploymentSupportsCompletion
                     ? QueryInternalUsingCompletionApi(context, deploymentName, prompt)
                     : QueryInternalUsingChatApi(context, deploymentName, prompt);
 
-                jsonResponse = JObject.Parse(response);
-            }
+                JObject jsonResponse;
 
-            yield return new ExternalSearchQueryResult<JObject>(query, jsonResponse);
+                try
+                {
+                    jsonResponse = JObject.Parse(response);
+                }
+                catch
+                {
+                    prompt +=
+                        "\n\nImportant: A prior attempt to answer this question resulted in malformed JSON. Please retry and verify that the output adheres strictly to the specified JSON format. The response must consist solely of valid JSON, as it will be programmatically processed.";
+
+                    response = deploymentSupportsCompletion
+                        ? QueryInternalUsingCompletionApi(context, deploymentName, prompt)
+                        : QueryInternalUsingChatApi(context, deploymentName, prompt);
+
+                    jsonResponse = JObject.Parse(response);
+                }
+
+                yield return new ExternalSearchQueryResult<JObject>(query, jsonResponse);
+            }
         }
     }
 
@@ -470,18 +472,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
         if (response.StatusCode == HttpStatusCode.TooManyRequests)
         {
-            // Try to get Retry-After from headers (Different model is having different request per minute)
-            var retryAfterHeader = response.Headers
-                .FirstOrDefault(h => h.Name.Equals("Retry-After", StringComparison.OrdinalIgnoreCase));
-
-            if (retryAfterHeader != null && int.TryParse(retryAfterHeader.Value?.ToString(), out var waitSeconds))
-            {
-                Thread.Sleep(waitSeconds * 1000);
-            }
-            else
-            {
-                Thread.Sleep(2000); // Set a default sleep time
-            }
+            WaitDueToTooManyRequests(executionContext, deploymentName, response, baseUrl);
 
             throw new Exception($"Too many requests - Call to openai returned HTTP {response.StatusCode}"); // hack the message must start with 'Too many requests' for the core to retry
         }
@@ -535,17 +526,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
         if (response.StatusCode == HttpStatusCode.TooManyRequests)
         {
-            // Try to get Retry-After from headers (Different model is having different request per minute)
-            var retryAfterHeader = response.Headers
-                .FirstOrDefault(h => h.Name.Equals("Retry-After", StringComparison.OrdinalIgnoreCase));
-            if (retryAfterHeader != null && int.TryParse(retryAfterHeader.Value?.ToString(), out var waitSeconds))
-            {
-                Thread.Sleep(waitSeconds * 1000);
-            }
-            else
-            {
-                Thread.Sleep(2000); // Set a default sleep time
-            }
+            WaitDueToTooManyRequests(executionContext, deploymentName, response, baseUrl);
 
             throw new Exception($"Too many requests - Call to openai returned HTTP {response.StatusCode}"); // hack the message must start with 'Too many requests' for the core to retry
         }
@@ -576,6 +557,28 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         }
 
         return content.TrimEnd();
+    }
+
+    private static void WaitDueToTooManyRequests(ExecutionContext executionContext, string deploymentName, IRestResponse response, string baseUrl)
+    {
+        var responseAt = DateTime.Now;
+
+        // Try to get Retry-After from headers (Different model is having different request per minute)
+        var retryAfterHeader = response.Headers
+            .FirstOrDefault(h => h.Name.Equals("Retry-After", StringComparison.OrdinalIgnoreCase));
+
+        if (!int.TryParse(retryAfterHeader?.Value?.ToString(), out var waitSeconds))
+        {
+            waitSeconds = 2;
+        }
+
+        using (new DistributedLock(executionContext, $"{nameof(AzureOpenAIExternalSearchProvider)}_{baseUrl}_{deploymentName}", exclusive: true))
+        {
+            var timeAlreadyWaited = (int)DateTime.Now.Subtract(responseAt).TotalMilliseconds;
+            var waitTime = waitSeconds * 1000 - timeAlreadyWaited;
+
+            Thread.Sleep(waitTime);
+        }
     }
 
     public override IPreviewImage GetPrimaryEntityPreviewImage(ExecutionContext context,
