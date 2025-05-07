@@ -26,8 +26,9 @@ namespace CluedIn.ExternalSearch.Providers.AzureOpenAI
             using var cmd = new SqlCommand("sp_getapplock", _connection);
             cmd.CommandType = CommandType.StoredProcedure;
             cmd.Transaction = _transaction;
+            cmd.CommandTimeout = 0;
 
-            cmd.Parameters.Add(new SqlParameter("@Resource", SqlDbType.NVarChar, 255) { Value = GetType().FullName });
+            cmd.Parameters.Add(new SqlParameter("@Resource", SqlDbType.NVarChar, 255) { Value = lockName });
             cmd.Parameters.Add(new SqlParameter("@LockMode", SqlDbType.NVarChar, 32) { Value = exclusive ? "Exclusive" : "Shared" });
             cmd.Parameters.Add(new SqlParameter("@LockTimeout", SqlDbType.Int) { Value = -1 });
             cmd.Parameters.Add(new SqlParameter("@Result", SqlDbType.Int) { Direction = ParameterDirection.ReturnValue });

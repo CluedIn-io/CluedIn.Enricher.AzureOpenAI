@@ -579,7 +579,12 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
             if (waitTime > 0)
             {
+                executionContext.Log.Log(LogLevel.Debug, $"Sleeping thread for {waitTime}ms due to TooManyRequest response received");
                 Thread.Sleep(waitTime);
+            }
+            else
+            {
+                executionContext.Log.Log(LogLevel.Debug, $"TooManyRequest response received however no need to sleep as another thread already blocked");
             }
         }
     }
