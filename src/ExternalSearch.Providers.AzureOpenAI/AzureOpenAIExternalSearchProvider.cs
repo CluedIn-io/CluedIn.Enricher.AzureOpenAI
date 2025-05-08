@@ -78,7 +78,12 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         IDictionary<string, object> config, IProvider provider)
     {
         var jobData = new AzureOpenAIExternalSearchJobData(config);
-        return InternalExecuteSearch(context, query, jobData);
+
+        return ActionExtensions.ExecuteWithRetry(
+            () => InternalExecuteSearch(context, query, jobData).ToArray(), // important we need to materialize the enumerable for ExecuteWithRetry to work
+            retryCount: 1000,
+            isTransient: ex => ex.ToString().Contains("TooManyRequests")    // the core will retry but only 3 times
+        );
     }
 
     public IEnumerable<Clue> BuildClues(ExecutionContext context, IExternalSearchQuery query,
