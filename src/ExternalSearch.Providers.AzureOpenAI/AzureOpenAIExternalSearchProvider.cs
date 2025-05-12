@@ -433,7 +433,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
                 try
                 {
-                    jsonResponse = JObject.Parse(response);
+                    jsonResponse = ParseResponse(response);
                 }
                 catch(Exception ex)
                 {
@@ -448,7 +448,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
                     try
                     {
-                        jsonResponse = JObject.Parse(response);
+                        jsonResponse = ParseResponse(response);
                     }
                     catch (Exception ex2)
                     {
@@ -459,6 +459,17 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
                 yield return new ExternalSearchQueryResult<JObject>(query, jsonResponse);
             }
         }
+    }
+
+    private static JObject ParseResponse(string response)
+    {
+        var m = Regex.Match(response, "(?<json>{.+})", RegexOptions.Singleline);
+        if (m.Success)
+        {
+            response = m.Groups["json"].Value;
+        }
+
+        return JObject.Parse(response);
     }
 
     private string QueryInternalUsingCompletionApi(ExecutionContext executionContext, string deploymentName, string prompt, bool logError = true)
