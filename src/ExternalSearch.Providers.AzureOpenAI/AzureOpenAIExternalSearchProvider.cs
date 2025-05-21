@@ -78,7 +78,12 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         IDictionary<string, object> config, IProvider provider)
     {
         var jobData = new AzureOpenAIExternalSearchJobData(config);
-        return InternalExecuteSearch(context, query, jobData);
+
+        return ActionExtensions.ExecuteWithRetry(
+            () => InternalExecuteSearch(context, query, jobData).ToArray(), // important we need to materialize the enumerable for ExecuteWithRetry to work
+            retryCount: 1000,
+            isTransient: ex => ex.ToString().Contains("TooManyRequests")    // the core will retry but only 3 times
+        );
     }
 
     public IEnumerable<Clue> BuildClues(ExecutionContext context, IExternalSearchQuery query,
@@ -228,7 +233,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
             return new ConnectionVerificationResult(false, "Prompt must contain at least one output. eg, {output:vocabulary:product.description}");
         }
 
-        var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName);
+        var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName, baseUrl);
 
         prompt = "Hello";
 
@@ -253,10 +258,8 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         }
     }
 
-    private bool DeploymentSupportsCompletion(ExecutionContext executionContext, string deploymentName)
+    private bool DeploymentSupportsCompletion(ExecutionContext executionContext, string deploymentName, string baseUrl)
     {
-        var baseUrl = executionContext.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "");
-
         var deploymentSupportsCompletionCacheKey = $"{nameof(DeploymentSupportsCompletion)}_{executionContext.Organization.Id}_{baseUrl}_{deploymentName}";
         if (_cache.TryGetValue(deploymentSupportsCompletionCacheKey, out var cached) && cached != null)
         {
@@ -412,37 +415,61 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
         using (context.Log.BeginScope("{0} {1}: query {2}", GetType().Name, "ExecuteSearch", query))
         {
-            context.Log.LogTrace("Starting external search for Id: '{Id}' QueryKey: '{QueryKey}'", query.Id, query.QueryKey);
-
             var prompt = query.QueryParameters["prompt"].Single();
             var deploymentName = query.QueryParameters["deploymentName"].Single();
+            var baseUrl = context.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "");
 
-            var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName);
-
-            var response = deploymentSupportsCompletion
-                ? QueryInternalUsingCompletionApi(context, deploymentName, prompt)
-                : QueryInternalUsingChatApi(context, deploymentName, prompt);
-
-            JObject jsonResponse;
-
-            try
+            using (new DistributedLock(context, $"{nameof(AzureOpenAIExternalSearchProvider)}_{baseUrl}_{deploymentName}", exclusive: false))
             {
-                jsonResponse = JObject.Parse(response);
-            }
-            catch
-            {
-                prompt +=
-                    "\n\nImportant: A prior attempt to answer this question resulted in malformed JSON. Please retry and verify that the output adheres strictly to the specified JSON format. The response must consist solely of valid JSON, as it will be programmatically processed.";
+                context.Log.LogTrace("Starting external search for Id: '{Id}' QueryKey: '{QueryKey}'", query.Id, query.QueryKey);
 
-                response = deploymentSupportsCompletion
+                var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName, baseUrl);
+
+                var response = deploymentSupportsCompletion
                     ? QueryInternalUsingCompletionApi(context, deploymentName, prompt)
                     : QueryInternalUsingChatApi(context, deploymentName, prompt);
 
-                jsonResponse = JObject.Parse(response);
-            }
+                JObject jsonResponse;
 
-            yield return new ExternalSearchQueryResult<JObject>(query, jsonResponse);
+                try
+                {
+                    jsonResponse = ParseResponse(response);
+                }
+                catch(Exception ex)
+                {
+                    context.Log.LogDebug(ex, $"Failed to parse json response from AI. Will try again. response was:\n{response}");
+
+                    prompt +=
+                        "\n\nImportant: A prior attempt to answer this question resulted in malformed JSON. Please retry and verify that the output adheres strictly to the specified JSON format. The response must consist solely of valid JSON, as it will be programmatically processed.";
+
+                    response = deploymentSupportsCompletion
+                        ? QueryInternalUsingCompletionApi(context, deploymentName, prompt)
+                        : QueryInternalUsingChatApi(context, deploymentName, prompt);
+
+                    try
+                    {
+                        jsonResponse = ParseResponse(response);
+                    }
+                    catch (Exception ex2)
+                    {
+                        throw new Exception($"Unable to deserialize the response generated by AI. The generated response was:\n{response}", ex2);
+                    }
+                }
+
+                yield return new ExternalSearchQueryResult<JObject>(query, jsonResponse);
+            }
         }
+    }
+
+    private static JObject ParseResponse(string response)
+    {
+        var m = Regex.Match(response, "(?<json>{.+})", RegexOptions.Singleline);
+        if (m.Success)
+        {
+            response = m.Groups["json"].Value;
+        }
+
+        return JObject.Parse(response);
     }
 
     private string QueryInternalUsingCompletionApi(ExecutionContext executionContext, string deploymentName, string prompt, bool logError = true)
@@ -470,7 +497,8 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
         if (response.StatusCode == HttpStatusCode.TooManyRequests)
         {
-            Thread.Sleep(2000); // while developing we observed that the error message says to retry in 2s
+            WaitDueToTooManyRequests(executionContext, deploymentName, response, baseUrl);
+
             throw new Exception($"Too many requests - Call to openai returned HTTP {response.StatusCode}"); // hack the message must start with 'Too many requests' for the core to retry
         }
 
@@ -523,7 +551,8 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
         if (response.StatusCode == HttpStatusCode.TooManyRequests)
         {
-            Thread.Sleep(2000); // while developing we observed that the error message says to retry in 2s
+            WaitDueToTooManyRequests(executionContext, deploymentName, response, baseUrl);
+
             throw new Exception($"Too many requests - Call to openai returned HTTP {response.StatusCode}"); // hack the message must start with 'Too many requests' for the core to retry
         }
 
@@ -553,6 +582,36 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         }
 
         return content.TrimEnd();
+    }
+
+    private static void WaitDueToTooManyRequests(ExecutionContext executionContext, string deploymentName, IRestResponse response, string baseUrl)
+    {
+        var responseAt = DateTime.Now;
+
+        // Try to get Retry-After from headers (Different model is having different request per minute)
+        var retryAfterHeader = response.Headers
+            .FirstOrDefault(h => h.Name.Equals("Retry-After", StringComparison.OrdinalIgnoreCase));
+
+        if (!int.TryParse(retryAfterHeader?.Value?.ToString(), out var waitSeconds))
+        {
+            waitSeconds = 2;
+        }
+
+        using (new DistributedLock(executionContext, $"{nameof(AzureOpenAIExternalSearchProvider)}_{baseUrl}_{deploymentName}", exclusive: true))
+        {
+            var timeAlreadyWaited = (int)DateTime.Now.Subtract(responseAt).TotalMilliseconds;
+            var waitTime = waitSeconds * 1000 - timeAlreadyWaited;
+
+            if (waitTime > 0)
+            {
+                executionContext.Log.Log(LogLevel.Debug, $"Sleeping thread for {waitTime}ms due to TooManyRequest response received");
+                Thread.Sleep(waitTime);
+            }
+            else
+            {
+                executionContext.Log.Log(LogLevel.Debug, $"TooManyRequest response received however no need to sleep as another thread already blocked");
+            }
+        }
     }
 
     public override IPreviewImage GetPrimaryEntityPreviewImage(ExecutionContext context,
