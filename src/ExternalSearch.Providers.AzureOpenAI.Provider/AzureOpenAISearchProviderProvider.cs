@@ -34,6 +34,21 @@ public class AzureOpenAISearchProviderProvider : ProviderBase, IExtendedProvider
     public Guide Guide { get; } = Constants.Guide;
     public new IntegrationType Type { get; } = Constants.IntegrationType;
     public IExternalSearchProvider ExternalSearchProvider { get; }
+    public bool SupportsEnricherV2 => true;
+    public Dictionary<string, object> ExtraInfo { get; } = new()
+    {
+        { "autoMap", false },
+        { "useEnricherOriginEntityCode", true },
+        { "supportConfidenceScore", false }, // for UI
+        { "minConfidenceScore", 0 }, // for UI
+        { "maxConfidenceScore", 100 }, // for UI
+        { "origin", "azureOpenAI" },
+        { "originField", string.Empty },
+        { "nameKeyField", string.Empty },
+        { "vocabKeyPrefix", string.Empty },
+        { "autoSubmission", false },
+        { "dataSourceSetId", string.Empty },
+    };
 
     private static IProviderMetadata GetMetaData()
     {
