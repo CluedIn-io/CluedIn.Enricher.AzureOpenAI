@@ -63,3 +63,4 @@ steps:
       deleteIntegrationEnvironmentScriptArguments: "-Action TearDown"
       publishCodeCoverage: true
       useGitVersionDotNetTool: true
+      publishToDevFeed: true
