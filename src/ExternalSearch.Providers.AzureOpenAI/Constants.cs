@@ -76,10 +76,14 @@ public static class Constants
         new()
         {
             DisplayName = "Prompt",
-            Type = "multiline",
+            Type = "aiPromptEditor",
             IsRequired = true,
             Name = KeyName.Prompt,
-            Help = "The instruction sent to Azure OpenAI for generating results. It requires at least one input (e.g., {Vocabulary:XXXX.YYYY}) and one output (e.g., {output:Vocabulary:PPPP.QQQQ}).",
+            Help = "The instruction sent to Azure OpenAI to generate results. It requires at least one input and one output.",
+            Options = new Dictionary<string, object>
+            {
+                {"supportsOutputVocabularyKey", true}
+            }
         },
     };
 
