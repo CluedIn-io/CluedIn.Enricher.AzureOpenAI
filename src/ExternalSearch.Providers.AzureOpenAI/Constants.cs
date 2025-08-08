@@ -80,6 +80,10 @@ public static class Constants
             IsRequired = true,
             Name = KeyName.Prompt,
             Help = "The instruction sent to Azure OpenAI to generate results. It requires at least one input and one output.",
+            Options = new Dictionary<string, object>
+            {
+                {"supportsOutputVocabularyKey", true}
+            }
         },
     };
 
