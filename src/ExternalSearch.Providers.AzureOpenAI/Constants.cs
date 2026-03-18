@@ -59,6 +59,22 @@ public static class Constants
     {
         new()
         {
+            DisplayName = "Base Url",
+            Type = "input",
+            IsRequired = true,
+            Name = KeyName.BaseUrl,
+            Help = "The base url for the Azure OpenAI Deployment",
+        },
+        new()
+        {
+            DisplayName = "API Key",
+            Type = "password",
+            IsRequired = true,
+            Name = KeyName.ApiKey,
+            Help = "The API Key for the Azure OpenAI Deployment",
+        },
+        new()
+        {
             DisplayName = "AI Deployment Name",
             Type = "input",
             IsRequired = true,
@@ -99,6 +115,8 @@ public static class Constants
     public struct KeyName
     {
         public const string AcceptedEntityType = "acceptedEntityType";
+        public const string BaseUrl = "aiBaseUrl";
+        public const string ApiKey = "aiApiKey";
         public const string AiDeployment = "aiDeploymentName";
         public const string Prompt = "prompt";
     }

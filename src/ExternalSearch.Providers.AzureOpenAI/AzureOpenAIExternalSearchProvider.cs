@@ -81,8 +81,8 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
         return ActionExtensions.ExecuteWithRetry(
             () => InternalExecuteSearch(context, query, jobData).ToArray(), // important we need to materialize the enumerable for ExecuteWithRetry to work
-            retryCount: 1000,
-            isTransient: ex => ex.ToString().Contains("TooManyRequests")    // the core will retry but only 3 times
+            retryCount: 1000, // the core will retry but only 3 times
+            isTransient: ex => ex.IsTransient() || ex.ToString().Contains("TooManyRequests") // added additional transient logic that the core does not know about
         );
     }
 
@@ -203,8 +203,9 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
     public ConnectionVerificationResult VerifyConnection(ExecutionContext context,
         IReadOnlyDictionary<string, object> config)
     {
-        var baseUrl = context.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "");
-        var apiKey = context.Organization.Settings.GetValue("OpenAiApiKey", "OpenAiApiKey", "");
+        var jobData = new AzureOpenAIExternalSearchJobData(config.ToDictionary(x => x.Key, x => x.Value));
+        var baseUrl = string.IsNullOrWhiteSpace(jobData.BaseUrl) ? context.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "") : jobData.BaseUrl;
+        var apiKey = string.IsNullOrWhiteSpace(jobData.ApiKey) ? context.Organization.Settings.GetValue("OpenAiApiKey", "OpenAiApiKey", "") : jobData.ApiKey;
         var deploymentName = config[Constants.KeyName.AiDeployment] as string;
         var prompt = config[Constants.KeyName.Prompt] as string;
 
@@ -233,15 +234,15 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
             return new ConnectionVerificationResult(false, "Prompt must contain at least one output. eg, {output:vocabulary:product.description}");
         }
 
-        var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName, baseUrl);
+        var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName, baseUrl, apiKey);
 
         prompt = "Hello";
 
         try
         {
             var response = deploymentSupportsCompletion
-                ? QueryInternalUsingCompletionApi(context, deploymentName, prompt)
-                : QueryInternalUsingChatApi(context, deploymentName, prompt);
+                ? QueryInternalUsingCompletionApi(context, deploymentName, prompt, baseUrl, apiKey)
+                : QueryInternalUsingChatApi(context, deploymentName, prompt, baseUrl, apiKey);
 
             return new ConnectionVerificationResult(!string.IsNullOrWhiteSpace(response), "Empty response receive from AI");
         }
@@ -258,7 +259,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         }
     }
 
-    private bool DeploymentSupportsCompletion(ExecutionContext executionContext, string deploymentName, string baseUrl)
+    private bool DeploymentSupportsCompletion(ExecutionContext executionContext, string deploymentName, string baseUrl, string apiKey)
     {
         var deploymentSupportsCompletionCacheKey = $"{nameof(DeploymentSupportsCompletion)}_{executionContext.Organization.Id}_{baseUrl}_{deploymentName}";
         if (_cache.TryGetValue(deploymentSupportsCompletionCacheKey, out var cached) && cached != null)
@@ -274,8 +275,6 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
             }
 
             var supportsCompletion = true;
-
-            var apiKey = executionContext.Organization.Settings.GetValue("OpenAiApiKey", "OpenAiApiKey", "");
 
             baseUrl = baseUrl.TrimEnd('/');
 
@@ -382,7 +381,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
                         Response in JSON using the following template
                         ###
                         {
-                            {{string.Join("\n    ", outputMatches.Select(m => $"""
+                            {{string.Join(",\n    ", outputMatches.Select(m => $"""
                                                                                "{m.Groups[1].Value}": ""
                                                                                """).Distinct())}}
                         }
@@ -417,17 +416,19 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         {
             var prompt = query.QueryParameters["prompt"].Single();
             var deploymentName = query.QueryParameters["deploymentName"].Single();
-            var baseUrl = context.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "");
+
+            var baseUrl = string.IsNullOrWhiteSpace(jobData.BaseUrl) ? context.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "") : jobData.BaseUrl;
+            var apiKey = string.IsNullOrWhiteSpace(jobData.ApiKey) ? context.Organization.Settings.GetValue("OpenAiApiKey", "OpenAiApiKey", "") : jobData.ApiKey;
 
             using (new DistributedLock(context, $"{nameof(AzureOpenAIExternalSearchProvider)}_{baseUrl}_{deploymentName}", exclusive: false))
             {
                 context.Log.LogTrace("Starting external search for Id: '{Id}' QueryKey: '{QueryKey}'", query.Id, query.QueryKey);
 
-                var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName, baseUrl);
+                var deploymentSupportsCompletion = DeploymentSupportsCompletion(context, deploymentName, baseUrl, apiKey);
 
                 var response = deploymentSupportsCompletion
-                    ? QueryInternalUsingCompletionApi(context, deploymentName, prompt)
-                    : QueryInternalUsingChatApi(context, deploymentName, prompt);
+                    ? QueryInternalUsingCompletionApi(context, deploymentName, prompt, baseUrl, apiKey)
+                    : QueryInternalUsingChatApi(context, deploymentName, prompt, baseUrl, apiKey);
 
                 JObject jsonResponse;
 
@@ -443,8 +444,8 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
                         "\n\nImportant: A prior attempt to answer this question resulted in malformed JSON. Please retry and verify that the output adheres strictly to the specified JSON format. The response must consist solely of valid JSON, as it will be programmatically processed.";
 
                     response = deploymentSupportsCompletion
-                        ? QueryInternalUsingCompletionApi(context, deploymentName, prompt)
-                        : QueryInternalUsingChatApi(context, deploymentName, prompt);
+                        ? QueryInternalUsingCompletionApi(context, deploymentName, prompt, baseUrl, apiKey)
+                        : QueryInternalUsingChatApi(context, deploymentName, prompt, baseUrl, apiKey);
 
                     try
                     {
@@ -472,11 +473,8 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         return JObject.Parse(response);
     }
 
-    private string QueryInternalUsingCompletionApi(ExecutionContext executionContext, string deploymentName, string prompt, bool logError = true)
+    private string QueryInternalUsingCompletionApi(ExecutionContext executionContext, string deploymentName, string prompt, string baseUrl, string apiKey, bool logError = true)
     {
-        var baseUrl = executionContext.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "");
-        var apiKey = executionContext.Organization.Settings.GetValue("OpenAiApiKey", "OpenAiApiKey", "");
-
         baseUrl = baseUrl.TrimEnd('/');
 
         var client = new RestClient(baseUrl);
@@ -524,11 +522,8 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         return first.Text.TrimStart('\n');
     }
 
-    private string QueryInternalUsingChatApi(ExecutionContext executionContext, string deploymentName, string prompt)
+    private string QueryInternalUsingChatApi(ExecutionContext executionContext, string deploymentName, string prompt, string baseUrl, string apiKey)
     {
-        var baseUrl = executionContext.Organization.Settings.GetValue("OpenAiBaseUrl", "OpenAiBaseUrl", "");
-        var apiKey = executionContext.Organization.Settings.GetValue("OpenAiApiKey", "OpenAiApiKey", "");
-
         baseUrl = baseUrl.TrimEnd('/');
 
         var client = new RestClient(baseUrl);
