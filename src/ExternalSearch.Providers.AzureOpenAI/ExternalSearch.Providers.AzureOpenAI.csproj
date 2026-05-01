@@ -13,7 +13,4 @@
     <PackageReference Include="CluedIn.ExternalSearch" />
     <PackageReference Include="CluedIn.Rules" />
   </ItemGroup>
-  <PropertyGroup>
-    <LangVersion>preview</LangVersion>
-  </PropertyGroup>
 </Project>
