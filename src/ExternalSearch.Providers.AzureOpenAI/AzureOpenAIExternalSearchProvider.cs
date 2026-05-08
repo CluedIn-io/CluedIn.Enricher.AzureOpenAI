@@ -282,7 +282,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
             var request =
                 new RestRequest(
                     $"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/completions?api-version=2022-12-01",
-                    Method.POST);
+                    Method.Post);
             request.AddHeader("api-key", apiKey);
             request.AddParameter("application/json",
                 JsonConvert.SerializeObject(new OpenAiCompletionRequest
@@ -478,7 +478,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         baseUrl = baseUrl.TrimEnd('/');
 
         var client = new RestClient(baseUrl);
-        var request = new RestRequest($"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/completions?api-version=2022-12-01", Method.POST);
+        var request = new RestRequest($"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/completions?api-version=2022-12-01", Method.Post);
         request.AddHeader("api-key", apiKey);
         request.AddParameter("application/json", JsonConvert.SerializeObject(new OpenAiCompletionRequest
         {
@@ -528,7 +528,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
         var client = new RestClient(baseUrl);
 
-        var request = new RestRequest($"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/chat/completions?api-version=2024-06-01", Method.POST);
+        var request = new RestRequest($"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/chat/completions?api-version=2024-06-01", Method.Post);
         request.AddHeader("api-key", apiKey);
         request.AddParameter("application/json", JsonConvert.SerializeObject(new OpenAiChatCompletionRequest
         {
@@ -579,7 +579,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         return content.TrimEnd();
     }
 
-    private static void WaitDueToTooManyRequests(ExecutionContext executionContext, string deploymentName, IRestResponse response, string baseUrl)
+    private static void WaitDueToTooManyRequests(ExecutionContext executionContext, string deploymentName, RestResponse response, string baseUrl)
     {
         var responseAt = DateTime.Now;
 
