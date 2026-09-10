@@ -133,4 +133,4 @@ and fails silently on a tight margin.
 - [x] Source — `#if CLUEDIN_V50` guards for the RestSharp 106↔114 break (4 call sites, `HttpPostMethod` const + `RestResponseCompat` alias)
 - [x] `GitVersion.yml` — merged into existing `ignore:` block; `next-version: 1.0`; `commits-before` padded 2 days
 - [x] All legs build clean locally (src + both test projects) before pushing
-- [ ] Push branch and confirm the actual Azure DevOps pipeline run is green end-to-end
+- [x] Pushed branch and confirmed the Azure DevOps pipeline is green end-to-end — PR #24, build 151986: all three legs (4.7.0, 4.8.0, 5.0.0-beta.*) + `Multi-version: publish` passed on the first push
