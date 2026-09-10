@@ -25,6 +25,14 @@ using Newtonsoft.Json.Linq;
 using RestSharp;
 using EntityType = CluedIn.Core.Data.EntityType;
 using ExecutionContext = CluedIn.Core.ExecutionContext;
+// RestSharp is a different major version per CluedIn generation (106.15.0 pre-5.0, 114.0.0 at
+// 5.0+): Method.Post is PascalCase-only from 107+ (106.x uses Method.POST), and client.Execute()
+// returns RestResponse (concrete class, 107+) vs IRestResponse (interface, 106.x).
+#if CLUEDIN_V50
+using RestResponseCompat = RestSharp.RestResponse;
+#else
+using RestResponseCompat = RestSharp.IRestResponse;
+#endif
 
 namespace CluedIn.ExternalSearch.Providers.AzureOpenAI;
 
@@ -35,6 +43,11 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
     IConfigurableExternalSearchProvider, IExternalSearchProviderWithVerifyConnection
 {
     private const string OutputMatchesPattern = "{(output:[^}]+?)}";
+#if CLUEDIN_V50
+    private const Method HttpPostMethod = Method.Post;
+#else
+    private const Method HttpPostMethod = Method.POST;
+#endif
     /**********************************************************************************************************
      * FIELDS
      **********************************************************************************************************/
@@ -282,7 +295,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
             var request =
                 new RestRequest(
                     $"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/completions?api-version=2022-12-01",
-                    Method.Post);
+                    HttpPostMethod);
             request.AddHeader("api-key", apiKey);
             request.AddParameter("application/json",
                 JsonConvert.SerializeObject(new OpenAiCompletionRequest
@@ -478,7 +491,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         baseUrl = baseUrl.TrimEnd('/');
 
         var client = new RestClient(baseUrl);
-        var request = new RestRequest($"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/completions?api-version=2022-12-01", Method.Post);
+        var request = new RestRequest($"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/completions?api-version=2022-12-01", HttpPostMethod);
         request.AddHeader("api-key", apiKey);
         request.AddParameter("application/json", JsonConvert.SerializeObject(new OpenAiCompletionRequest
         {
@@ -528,7 +541,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
 
         var client = new RestClient(baseUrl);
 
-        var request = new RestRequest($"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/chat/completions?api-version=2024-06-01", Method.Post);
+        var request = new RestRequest($"/openai/deployments/{HttpUtility.UrlEncode(deploymentName)}/chat/completions?api-version=2024-06-01", HttpPostMethod);
         request.AddHeader("api-key", apiKey);
         request.AddParameter("application/json", JsonConvert.SerializeObject(new OpenAiChatCompletionRequest
         {
@@ -579,7 +592,7 @@ public class AzureOpenAIExternalSearchProvider : ExternalSearchProviderBase, IEx
         return content.TrimEnd();
     }
 
-    private static void WaitDueToTooManyRequests(ExecutionContext executionContext, string deploymentName, RestResponse response, string baseUrl)
+    private static void WaitDueToTooManyRequests(ExecutionContext executionContext, string deploymentName, RestResponseCompat response, string baseUrl)
     {
         var responseAt = DateTime.Now;
 

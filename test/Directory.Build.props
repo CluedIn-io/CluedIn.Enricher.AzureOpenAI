@@ -5,14 +5,10 @@
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="AutoFixture.Xunit3" />
-    <PackageReference Include="coverlet.msbuild" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" />
-    <PackageReference Include="xunit.v3" />
-    <PackageReference Include="xunit.runner.visualstudio" />
-    <PackageReference Include="Moq" />
-    <PackageReference Include="Shouldly" />
-  </ItemGroup>
+  <!-- No unconditional PackageReferences here - xunit v2/v3 + AutoFixture selection differs by
+       CluedIn target (see Packages.props), and must be conditioned on DefineConstants in each
+       individual test csproj, not here. An unconditional xunit.v3 reference here plus a
+       conditional xunit v2 reference in a non-V50 leg's csproj would put both xunit generations in
+       the compile references at once -> CS0433 type clash. -->
 
 </Project>

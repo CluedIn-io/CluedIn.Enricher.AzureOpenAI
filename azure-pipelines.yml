@@ -8,7 +8,14 @@ parameters:
   - name: pipelineTemplateRef
     displayName: Pipeline Template Ref
     type: string
-    default: refs/heads/refactor
+    default: refs/heads/feature/multi-version-packaging
+
+  # Manual, one-off check that this repo still builds and tests cleanly against a CluedIn.Core
+  # version outside multiVersionCluedInTargets below - leave blank for a normal run.
+  - name: probeCluedInVersion
+    displayName: Probe CluedIn Version (leave blank for a normal run)
+    type: string
+    default: ''
 
 trigger:
   branches:
@@ -28,9 +35,6 @@ resources:
       endpoint: "CluedIn-io"
       ref: ${{ parameters.pipelineTemplateRef }}
 
-pool:
-  vmImage: 'windows-latest'
-
 variables:
   - name: testFolderPath
     value: "$(Build.SourcesDirectory)/test"
@@ -42,25 +46,30 @@ variables:
     value: Release
   - name: system.debug
     value: true
-    
-steps:
-  - task: UseDotNet@2
-    displayName: Install .NET SDK 6.0
-    inputs:
-      version: 8.0.x
 
-  - task: NuGetAuthenticate@0
-    displayName: "Authenticate with nuget"
-
-  - template: crawler.build.yml@templates
+# jobs:, not pool:/steps: - crawler.build.jobs.yml is a jobs template, the only one with
+# multi-version support (crawler.build.yml has none).
+jobs:
+  - template: crawler.build.jobs.yml@templates
     parameters:
+      pool:
+        vmImage: 'ubuntu-22.04'
       githubReleaseInMaster: true
       publicReleaseForMaster: true
-      executeIntegrationTests: ${{ parameters.runIntegrationTests }}
-      createIntegrationEnvironmentScriptFilePath: "./build/integration-test.ps1"
-      createIntegrationEnvironmentScriptArguments: "-Action SetUp"
-      deleteIntegrationEnvironmentScriptFilePath: "./build/integration-test.ps1"
-      deleteIntegrationEnvironmentScriptArguments: "-Action TearDown"
       publishCodeCoverage: true
       useGitVersionDotNetTool: true
       publishToDevFeed: true
+      probeCluedInVersion: ${{ parameters.probeCluedInVersion }}
+      # executeIntegrationTests left at the caller-supplied default (false): the repo's one
+      # integration test class is entirely wrapped in a disabled #if AzureOpenAI_DEV block (no live
+      # test methods), and the create/delete integration-environment script path the old pipeline
+      # referenced ("./build/integration-test.ps1") doesn't exist in this repo - dropped rather than
+      # carried forward as a dead reference.
+      executeIntegrationTests: ${{ parameters.runIntegrationTests }}
+      # 4.7.0/4.8.0 are net6.0; 5.0.0-beta.* floats to whatever prerelease is newest in the develop
+      # feed. 4.6.0 excluded - no IStreamRepository/stream-API usage in this repo's small
+      # ExternalSearchProvider surface that would require it.
+      multiVersionCluedInTargets:
+        - cluedInVersion: '4.7.0'
+        - cluedInVersion: '4.8.0'
+        - cluedInVersion: '5.0.0-beta.*'
